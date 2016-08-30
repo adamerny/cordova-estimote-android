@@ -53,7 +53,7 @@ var _estimote = function() {
                     success: obj
                 };
             }
-            else if (typeof(obj) != 'object' || (object instanceof Array)) {
+            else if (typeof(obj) != 'object' || (obj instanceof Array)) {
                 obj = {
                     data: obj
                 }
