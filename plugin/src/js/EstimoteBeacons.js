@@ -52,6 +52,7 @@ var _estimote = function() {
 			if (!(obj.data instanceof Array)) obj.data = [obj.data];
             obj.success = obj.success || HelperUtils.noop;
             obj.error = obj.error || HelperUtils.noop;
+            return obj;
         }
     };
 
