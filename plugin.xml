@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://cordova.apache.org/ns/plugins/1.0"
+	xmlns:android="http://schemas.android.com/apk/res/android"
+	id="cordova-plugin-estimote-v2"
+	version="0.10.0">
+
+	<name>EstimoteBeacons</name>
+	<description>Cordova plugin for Estimote beacons.</description>
+	<license>MIT</license>
+	<keywords>Estimote, Beacons</keywords>
+
+	<js-module src="plugin/src/js/EstimoteBeacons.js" name="EstimoteBeacons">
+		<clobbers target="Estimote" />
+	</js-module>
+
+	<platform name="android">
+		<config-file target="res/xml/config.xml" parent="/*">
+			<feature name="EstimoteBeacons" >
+				<param name="android-package" value="com.evothings.EstimoteBeacons"/>
+			</feature>
+		</config-file>
+		<config-file target="AndroidManifest.xml" parent="/manifest">
+			<uses-permission android:name="android.permission.BLUETOOTH" />
+			<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+		</config-file>
+		<config-file target="AndroidManifest.xml" parent="/manifest/application">
+			<service android:name="com.estimote.sdk.service.BeaconService" android:exported="false"/>
+		</config-file>
+
+		<framework src="plugin/src/android/build-estimote.gradle" custom="true" type="gradleReference" />
+
+		<source-file src="plugin/src/android/EstimoteBeacons.java" target-dir="src/com/evothings" />
+		<source-file src="plugin/src/android/LogUtils.java" target-dir="src/com/evothings" />
+	</platform>
+</plugin>

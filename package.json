@@ -1,0 +1,24 @@
+{
+  "name": "cordova-plugin-estimote-v2",
+  "version": "0.10.0",
+  "description": "Cordova plugin for Estimote beacons.",
+  "cordova": {
+    "id": "cordova-plugin-estimote-v2",
+    "platforms": [
+      "android"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adamerny/cordova-estimotebeacons-v2.git"
+  },
+  "keywords": [
+    "Estimote",
+    "Beacons",
+    "ecosystem:cordova",
+    "cordova-android"
+  ],
+  "author": "Adam Erny",
+  "license": "MIT",
+  "homepage": "https://github.com/adamerny/cordova-estimotebeacons-v2#readme"
+}
