@@ -21,6 +21,10 @@ import com.estimote.sdk.Utils;
 import com.estimote.sdk.cloud.model.BeaconInfo;
 import com.estimote.sdk.cloud.model.BeaconInfoSettings;
 import com.estimote.sdk.connection.BeaconConnection;
+import com.estimote.sdk.connection.DeviceConnection;
+import com.estimote.sdk.connection.DeviceConnectionCallback;
+import com.estimote.sdk.connection.DeviceConnectionProvider;
+import com.estimote.sdk.connection.exceptions.DeviceConnectionException;
 import com.estimote.sdk.connection.scanner.ConfigurableDevice;
 import com.estimote.sdk.connection.scanner.ConfigurableDevicesScanner;
 import com.estimote.sdk.connection.scanner.DeviceType;
@@ -30,7 +34,6 @@ import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaArgs;
 import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaPlugin;
-import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -60,7 +63,10 @@ public class EstimoteBeacons extends CordovaPlugin
 
     private ConfigurableDevicesScanner mDeviceScanner;
     private List<ConfigurableDevicesScanner.ScanResultItem> mScannedDevices;
-//    private DeviceConnected  mConnectedDevice;
+    private DeviceConnectionProvider mDeviceConnectionProvider;
+    private DeviceConnection  mConnectedDevice;
+    private boolean           mDeviceConnectionProviderIsConnected = false;
+    private boolean           mIsScanning = false;
 
     private ArrayList<Beacon> mRangedBeacons;
     private BeaconConnected   mConnectedBeacon;
@@ -74,24 +80,22 @@ public class EstimoteBeacons extends CordovaPlugin
             new HashMap<String, CallbackContext>();
 
     private CallbackContext   mBluetoothStateCallbackContext;
-    private CallbackContext   mBeaconConnectionCallback;
-    private CallbackContext   mBeaconDisconnectionCallback;
+    private CallbackContext   mBeaconConnectionCallbackContext;
+    private CallbackContext   mBeaconDisconnectionCallbackContext;
 
     private CallbackContext   mScanningCallbackContext;
+    private CallbackContext   mDeviceConnectionCallbackContext;
 
     private Context mApplicationContext;
 
-    // todo: consider using pluginInitialize instead, per Cordova recommendation
-    //   https://github.com/apache/cordova-android/blob/master/framework/src/org/apache/cordova/CordovaPlugin.java#L60-L61
+    //   https://github.com/apache/cordova-android/blob/master/framework/src/org/apache/cordova/CordovaPlugin.java#L72
     /**
      * Plugin initialiser.
      */
     @Override
-    public void initialize(final CordovaInterface cordova, CordovaWebView webView)
+    public void pluginInitialize()
     {
         LogUtils.i(LOGTAG, "initialize");
-
-        super.initialize(cordova, webView);
 
         mCordovaInterface = cordova;
         mCordovaInterface.setActivityResultCallback(this);
@@ -108,6 +112,10 @@ public class EstimoteBeacons extends CordovaPlugin
                 LogUtils.e(LOGTAG, "BeaconManager error: " + errorId);
             }
         });
+
+        if (null == mDeviceScanner) {
+            mDeviceScanner = new ConfigurableDevicesScanner(mApplicationContext);
+        }
 
         mRangedBeacons = new ArrayList<Beacon>();
         mScannedDevices = new ArrayList<ConfigurableDevicesScanner.ScanResultItem>();
@@ -132,8 +140,20 @@ public class EstimoteBeacons extends CordovaPlugin
       */
     public void onDestroy() {
         LogUtils.i(LOGTAG, "onDestroy");
+        disconnectConnectedDevice();
         disconnectConnectedBeacon();
+        disconnectDeviceConnectionProvider();
         disconnectBeaconManager();
+    }
+
+    /**
+     * Disconnect from the device provider.
+      */
+    private void disconnectDeviceConnectionProvider() {
+        if (mDeviceConnectionProvider != null && mDeviceConnectionProviderIsConnected) {
+            mDeviceConnectionProvider.destroy();
+            mDeviceConnectionProviderIsConnected = false;
+        }
     }
 
     /**
@@ -168,6 +188,13 @@ public class EstimoteBeacons extends CordovaPlugin
         else if ("beacons_stopScanningDevices".equals(action)) {
             stopScanningDevices(args, callbackContext);
         }
+        else if ("beacons_connectToDevice".equals(action)) {
+            connectToDevice(args, callbackContext);
+        }
+        else if ("beacons_disconnectConnectedDevice".equals(action)) {
+            disconnectConnectedDevice(args, callbackContext);
+        }
+
         else if ("beacons_startRangingBeaconsInRegion".equals(action)) {
             startRangingBeaconsInRegion(args, callbackContext);
         }
@@ -298,13 +325,9 @@ public class EstimoteBeacons extends CordovaPlugin
             json = new JSONObject();
         }
 
-        if (null == mDeviceScanner) {
-            mDeviceScanner = new ConfigurableDevicesScanner(mApplicationContext);
-        }
-
         // Stop scanning before starting again
-        // TODO: See if there is a way to check if "isScanning"
-        mDeviceScanner.stopScanning();
+        if (mIsScanning)
+            mDeviceScanner.stopScanning();
 
         configureDeviceScanner(json);
 
@@ -312,6 +335,7 @@ public class EstimoteBeacons extends CordovaPlugin
 
         // Start scanning
         mDeviceScanner.scanForDevices(new PluginScanningListener());
+        mIsScanning = true;
     }
 
     /**
@@ -349,15 +373,6 @@ public class EstimoteBeacons extends CordovaPlugin
     }
 
     /**
-     * Helper method. (Newer method than ranging)
-     */
-    private void startScanning(Region region, CallbackContext callbackContext)
-    {
-        LogUtils.i(LOGTAG, "startScanning");
-        mBeaconManager.startRanging(region);
-    }
-
-    /**
      * Stop scanning for beacons. (Newer method than ranging)
      */
     private void stopScanningDevices(
@@ -367,38 +382,25 @@ public class EstimoteBeacons extends CordovaPlugin
     {
         LogUtils.i(LOGTAG, "stopScanningDevices");
 
-        JSONObject json = cordovaArgs.getJSONObject(0);
 
-        Region region = createRegion(json);
-
-        // If ranging callback does not exist call error callback
-        String key = regionHashMapKey(region);
-        CallbackContext rangingCallback = mRangingCallbackContexts.get(key);
-        if (null == rangingCallback) {
-            callbackContext.error("Region not ranged");
-            return;
-        }
-
-        // Remove ranging callback from hash map.
-        mRangingCallbackContexts.remove(key);
-
-        // Clear ranging callback on JavaScript side.
+        // Send empty payload
         PluginResult result = new PluginResult(PluginResult.Status.NO_RESULT);
         result.setKeepCallback(false);
-        rangingCallback.sendPluginResult(result);
+        mScanningCallbackContext.sendPluginResult(result);
 
-        // Stop ranging if connected.
-        if (mIsConnected) {
-            LogUtils.i(LOGTAG, "stopRanging");
+        mScanningCallbackContext = null;
 
-            // Stop ranging.
-            mBeaconManager.stopRanging(region);
+        if (mIsScanning) {
+            // Stop scanning.
+            mDeviceScanner.stopScanning();
+            mIsScanning = false;
 
             // Send back success.
             callbackContext.success();
+            LogUtils.i(LOGTAG, "Scanning stopped");
         }
         else {
-            callbackContext.error("Not connected");
+            callbackContext.error("Not scanning.");
         }
     }
 
@@ -671,6 +673,29 @@ public class EstimoteBeacons extends CordovaPlugin
     }
 
     /**
+     * Find device in scannedDevices, with MAC address
+     */
+    private ConfigurableDevicesScanner.ScanResultItem findDevice(String macAddress) {
+        LogUtils.i(LOGTAG, "findDevice(String)");
+        MacAddress mac;
+        try {
+            mac = MacAddress.fromString(macAddress);
+        }
+        catch(NullPointerException e) {
+            return null;
+        }
+
+        for (Iterator<ConfigurableDevicesScanner.ScanResultItem> i = mScannedDevices.iterator(); i.hasNext();) {
+            ConfigurableDevicesScanner.ScanResultItem d = i.next();
+            if (d.device.macAddress.equals(mac)) {
+                return d;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Find beacon in rangedBeacons, with MAC address
      */
     private Beacon findBeacon(String macAddress) {
@@ -731,7 +756,110 @@ public class EstimoteBeacons extends CordovaPlugin
         return null;
     }
 
-    // todo: consider mac address only version?
+    /**
+     * Connect to device
+     */
+    private void connectToDevice(ConfigurableDevice device) {
+        mConnectedDevice = mDeviceConnectionProvider.getConnection(device);
+        mConnectedDevice.connect(new DeviceConnectionCallback() {
+            @Override
+            public void onConnected() {
+                LogUtils.i(LOGTAG, "onConnected: " + mConnectedDevice.settings.beacon.proximityUUID().toString());
+            }
+
+            @Override
+            public void onDisconnected() {
+                LogUtils.i(LOGTAG, "onDisconnected");
+            }
+
+            @Override
+            public void onConnectionFailed(DeviceConnectionException e) {
+                String msg = (e.getMessage() == null) ? "There was an error connecting to this device." : (e.getMessage());
+                LogUtils.i(LOGTAG, "onConnectionFailed: " + msg);
+                if (null != mDeviceConnectionCallbackContext) {
+                    mDeviceConnectionCallbackContext.error(msg);
+                }
+            }
+        });
+    }
+
+    /**
+     * Connect to device
+     */
+    private void connectToDevice(
+            CordovaArgs cordovaArgs,
+            final CallbackContext callbackContext)
+            throws JSONException
+    {
+        LogUtils.i(LOGTAG, "connectToDevice");
+
+        JSONObject json;
+        try {
+            json = cordovaArgs.getJSONObject(0);
+        }
+        catch(JSONException e) {
+            json = new JSONObject();
+        }
+
+        if (null == mDeviceConnectionProvider) {
+            mDeviceConnectionProvider = new DeviceConnectionProvider(mApplicationContext);
+        }
+
+        final ConfigurableDevicesScanner.ScanResultItem d = findDevice(json.optString("macAddress"));
+
+        if (null == d) {
+            callbackContext.error("Could not find device");
+            return;
+        }
+
+        if (mConnectedDevice != null) {
+            disconnectConnectedDevice();
+        }
+
+        mDeviceConnectionCallbackContext = callbackContext;
+
+        if (mDeviceConnectionProviderIsConnected) {
+            connectToDevice(d.device);
+        }
+        else {
+            mDeviceConnectionProvider.connectToService(new DeviceConnectionProvider.ConnectionProviderCallback() {
+                @Override
+                public void onConnectedToService() {
+                    mDeviceConnectionProviderIsConnected = true;
+                    connectToDevice(d.device);
+                }
+            });
+        }
+
+        return;
+    }
+
+    /**
+     * Disconnect connected device
+     */
+    private void disconnectConnectedDevice() {
+        LogUtils.i(LOGTAG, "disconnectConnectedDevice");
+
+        if (mConnectedDevice != null && mConnectedDevice.isConnected()) {
+            mConnectedDevice.close();
+            mConnectedDevice = null;
+        }
+    }
+
+    /**
+     * Disconnect connected device, c/o Cordova
+     */
+    private void disconnectConnectedDevice(
+            CordovaArgs cordovaArgs,
+            final CallbackContext callbackContext)
+            throws JSONException
+    {
+        LogUtils.i(LOGTAG, "disconnectConnectedDevice (cordova)");
+
+        mBeaconDisconnectionCallbackContext = callbackContext;
+        disconnectConnectedDevice();
+    }
+
     /**
      * Connect to beacon
      */
@@ -756,7 +884,7 @@ public class EstimoteBeacons extends CordovaPlugin
             disconnectConnectedBeacon();
         }
 
-        mBeaconConnectionCallback = callbackContext;
+        mBeaconConnectionCallbackContext = callbackContext;
 
         // Create error listener.
         mBeaconManager.setErrorListener(new PluginErrorListener(callbackContext));
@@ -794,7 +922,7 @@ public class EstimoteBeacons extends CordovaPlugin
     {
         LogUtils.i(LOGTAG, "disconnectConnectedBeacon (cordova)");
 
-        mBeaconDisconnectionCallback = callbackContext;
+        mBeaconDisconnectionCallbackContext = callbackContext;
         disconnectConnectedBeacon();
     }
 
@@ -1315,7 +1443,7 @@ public class EstimoteBeacons extends CordovaPlugin
 
         @Override public void onConnected(BeaconInfo beaconInfo) {
             LogUtils.i(this.toString(), "onConnected");
-            CallbackContext callback = mBeaconConnectionCallback;
+            CallbackContext callback = mBeaconConnectionCallbackContext;
 
             if (callback == null) {
                 return;
@@ -1371,12 +1499,12 @@ public class EstimoteBeacons extends CordovaPlugin
             }
 
             // cleanup
-            mBeaconConnectionCallback = null;
+            mBeaconConnectionCallbackContext = null;
         }
 
         @Override public void onAuthenticationError(EstimoteDeviceException e) {
             LogUtils.i(this.toString(), "onAuthenticationError");
-            CallbackContext callback = mBeaconConnectionCallback;
+            CallbackContext callback = mBeaconConnectionCallbackContext;
 
             if (callback == null) {
                 return;
@@ -1394,12 +1522,12 @@ public class EstimoteBeacons extends CordovaPlugin
             LogUtils.e(LOGTAG, sw.toString());
 
             // cleanup
-            mBeaconConnectionCallback = null;
+            mBeaconConnectionCallbackContext = null;
         }
 
         @Override public void onDisconnected() {
             LogUtils.i(this.toString(), "onDisconnected");
-            CallbackContext callback = mBeaconDisconnectionCallback;
+            CallbackContext callback = mBeaconDisconnectionCallbackContext;
 
             if (callback == null) {
                 return;
@@ -1409,26 +1537,9 @@ public class EstimoteBeacons extends CordovaPlugin
             callback.sendPluginResult(r);
 
             // cleanup
-            mBeaconDisconnectionCallback = null;
+            mBeaconDisconnectionCallbackContext = null;
         }
     }
-
-//    public class DeviceConnected extends DeviceConnection {
-//        private Beacon mBeacon;
-//
-//        public DeviceConnected(
-//                Context context,
-//                Beacon beacon,
-//                BeaconConnection.ConnectionCallback connectionCallback
-//        ) {
-//            super(context, beacon, connectionCallback);
-//            this.mBeacon = beacon;
-//        }
-//
-//        public Beacon getBeacon() {
-//            return mBeacon;
-//        }
-//    }
 
     @SuppressWarnings("deprecation")
     public class BeaconConnected extends BeaconConnection {

@@ -48,6 +48,16 @@ var _estimote = function() {
         },
         processParams: function(obj) {
             obj = obj || {};
+            if (typeof(obj) == 'function') {
+                obj = {
+                    success: obj
+                };
+            }
+            else if (typeof(obj) != 'object' || (object instanceof Array)) {
+                obj = {
+                    data: obj;
+                }
+            }
             obj.data = obj.data || [];
 			if (!(obj.data instanceof Array)) obj.data = [obj.data];
             obj.success = obj.success || HelperUtils.noop;
@@ -60,9 +70,9 @@ var _estimote = function() {
         exec: function(obj, method) {
             return cordova.exec(obj.success, obj.error, 'EstimoteBeacons', method, obj.data);
         },
-        execParamsRegionSuccessError: function(obj) {
+        execParamsDataSuccessError: function(obj) {
             obj = obj || {};
-            var caller = HelperUtils.cordova.execParamsRegionSuccessError.caller.name;
+            var caller = HelperUtils.cordova.execParamsDataSuccessError.caller.name;
 
             return (HelperUtils.checkType('data', obj.data, 'object', caller) &&
                 HelperUtils.checkType('success', obj.success, 'function', caller) &&
@@ -75,9 +85,9 @@ var _estimote = function() {
             return (HelperUtils.checkType('success', obj.success, 'function', caller) &&
                 HelperUtils.checkType('error', obj.error, 'function', caller));
         },
-        execParamsRegion: function(obj) {
+        execParamsData: function(obj) {
             obj = obj || {};
-            var caller = HelperUtils.cordova.execParamsRegion.caller.name;
+            var caller = HelperUtils.cordova.execParamsData.caller.name;
 
             return (HelperUtils.checkType('data', obj.data, 'object', caller));
         }
@@ -202,7 +212,7 @@ var _estimote = function() {
         },
         startRangingBeaconsInRegion: function(obj) {
             obj = HelperUtils.processParams(obj);
-            if (!HelperUtils.cordova.execParamsRegionSuccessError(obj)) {
+            if (!HelperUtils.cordova.execParamsDataSuccessError(obj)) {
                 return false;
             }
 
@@ -212,7 +222,7 @@ var _estimote = function() {
         },
         stopRangingBeaconsInRegion: function(obj) {
             obj = HelperUtils.processParams(obj);
-            if (!HelperUtils.cordova.execParamsRegion(obj)) {
+            if (!HelperUtils.cordova.execParamsData(obj)) {
                 return false;
             }
 
@@ -222,7 +232,7 @@ var _estimote = function() {
         },
         // startRangingSecureBeaconsInRegion: function(obj) { /** iOS only**/
         //     obj = HelperUtils.processParams(obj);
-        //     if (!HelperUtils.cordova.execParamsRegionSuccessError(obj)) {
+        //     if (!HelperUtils.cordova.execParamsDataSuccessError(obj)) {
         //         return false;
         //     }
 		//
@@ -232,7 +242,7 @@ var _estimote = function() {
         // },
         // stopRangingSecureBeaconsInRegion: function(obj) { /** iOS only**/
         //     obj = HelperUtils.processParams(obj);
-        //     if (!HelperUtils.cordova.execParamsRegion(obj)) {
+        //     if (!HelperUtils.cordova.execParamsData(obj)) {
         //         return false;
         //     }
 		//
@@ -242,7 +252,7 @@ var _estimote = function() {
         // },
         startMonitoringForRegion: function(obj) {
             obj = HelperUtils.processParams(obj);
-            if (!HelperUtils.cordova.execParamsRegionSuccessError(obj)) {
+            if (!HelperUtils.cordova.execParamsDataSuccessError(obj)) {
                 return false;
             }
             if (obj.data.length == 1) obj.data.push(true); // notifyEntryStateOnDisplay
@@ -253,7 +263,7 @@ var _estimote = function() {
         },
         stopMonitoringForRegion: function(obj) {
             obj = HelperUtils.processParams(obj);
-            if (!HelperUtils.cordova.execParamsRegion(obj)) {
+            if (!HelperUtils.cordova.execParamsData(obj)) {
                 return false;
             }
 
@@ -263,7 +273,7 @@ var _estimote = function() {
         },
         // startSecureMonitoringForRegion: function(obj) { /** iOS only**/
         //     obj = HelperUtils.processParams(obj);
-        //     if (!HelperUtils.cordova.execParamsRegionSuccessError(obj)) {
+        //     if (!HelperUtils.cordova.execParamsDataSuccessError(obj)) {
         //         return false;
         //     }
         //     if (obj.data.length == 1) obj.data.push(true); // notifyEntryStateOnDisplay
@@ -274,7 +284,7 @@ var _estimote = function() {
         // },
         // stopSecureMonitoringForRegion: function(obj) { /** iOS only**/
         //     obj = HelperUtils.processParams(obj);
-        //     if (!HelperUtils.cordova.execParamsRegion(obj)) {
+        //     if (!HelperUtils.cordova.execParamsData(obj)) {
         //         return false;
         //     }
 		//
@@ -282,13 +292,25 @@ var _estimote = function() {
 		//
         //     return true;
         // },
+        connectToDevice: function(obj) {
+            obj = HelperUtils.processParams(obj);
+            if (!HelperUtils.cordova.execParamsData(obj)) return false;
+
+            HelperUtils.cordova.exec(obj, 'beacons_connectToDevice'); // [beacon]
+
+            return true;
+        },
         connectToBeacon: function(obj) {
             obj = HelperUtils.processParams(obj);
-            if (typeof(beacon) !== 'object') {
-                return false;
-            }
+            if (!HelperUtils.cordova.execParamsData(obj)) return false;
 
             HelperUtils.cordova.exec(obj, 'beacons_connectToBeacon'); // [beacon]
+
+            return true;
+        },
+        disconnectConnectedDevice: function(obj) {
+            obj = HelperUtils.processParams(obj);
+            HelperUtils.cordova.exec(obj, 'beacons_disconnectConnectedDevice');
 
             return true;
         },
