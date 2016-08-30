@@ -55,7 +55,7 @@ var _estimote = function() {
             }
             else if (typeof(obj) != 'object' || (object instanceof Array)) {
                 obj = {
-                    data: obj;
+                    data: obj
                 }
             }
             obj.data = obj.data || [];
