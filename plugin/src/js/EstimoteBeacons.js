@@ -1,3 +1,4 @@
+cordova.define("cordova-plugin-estimote-v2.EstimoteBeacons", function(require, exports, module) {
 var _estimote = function() {
     if (window.Estimote) return window.Estimote;
 
@@ -627,3 +628,5 @@ var _estimote = function() {
 };
 
 module.exports = new _estimote();
+
+});

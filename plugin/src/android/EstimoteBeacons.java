@@ -28,6 +28,9 @@ import com.estimote.sdk.connection.exceptions.DeviceConnectionException;
 import com.estimote.sdk.connection.scanner.ConfigurableDevice;
 import com.estimote.sdk.connection.scanner.ConfigurableDevicesScanner;
 import com.estimote.sdk.connection.scanner.DeviceType;
+import com.estimote.sdk.connection.settings.SettingCallback;
+import com.estimote.sdk.connection.settings.Settings;
+import com.estimote.sdk.connection.settings.SettingsReader;
 import com.estimote.sdk.exception.EstimoteDeviceException;
 
 import org.apache.cordova.CallbackContext;
@@ -44,7 +47,9 @@ import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -64,8 +69,10 @@ public class EstimoteBeacons extends CordovaPlugin {
     private List<ConfigurableDevicesScanner.ScanResultItem> mScannedDevices;
     private DeviceConnectionProvider mDeviceConnectionProvider;
     private DeviceConnection mConnectedDevice;
+    private LinkedHashMap mConnectedDeviceHashMap;
     private boolean mDeviceConnectionProviderIsConnected = false;
     private boolean mIsScanning = false;
+    private boolean mIsFetchingSettings = false;
 
     private ArrayList<Beacon> mRangedBeacons;
     private BeaconConnected mConnectedBeacon;
@@ -88,6 +95,37 @@ public class EstimoteBeacons extends CordovaPlugin {
     private Context mApplicationContext;
 
     //   https://github.com/apache/cordova-android/blob/master/framework/src/org/apache/cordova/CordovaPlugin.java#L72
+
+    /**
+     * Return VERBOSE_MODE
+     */
+    public static Boolean getVerboseMode() {
+        return (VERBOSE_MODE == 1);
+    }
+
+    /**
+     * Create JSON object representing a region.
+     */
+    private static JSONObject makeJSONRegion(Region region)
+            throws JSONException {
+        return makeJSONRegion(region, null);
+    }
+
+    /**
+     * Create JSON object representing a region in the given state.
+     */
+    private static JSONObject makeJSONRegion(Region region, String state)
+            throws JSONException {
+        JSONObject json = new JSONObject();
+        json.put("identifier", region.getIdentifier());
+        json.put("uuid", region.getProximityUUID());
+        json.put("major", region.getMajor());
+        json.put("minor", region.getMinor());
+        if (state != null) {
+            json.put("state", state);
+        }
+        return json;
+    }
 
     /**
      * Plugin initializer.
@@ -166,13 +204,6 @@ public class EstimoteBeacons extends CordovaPlugin {
             mBeaconManager.disconnect();
             mIsConnected = false;
         }
-    }
-
-    /**
-     * Return VERBOSE_MODE
-     */
-    public static Boolean getVerboseMode() {
-        return (VERBOSE_MODE == 1);
     }
 
     /**
@@ -700,6 +731,7 @@ public class EstimoteBeacons extends CordovaPlugin {
             @Override
             public void onConnected() {
                 LogUtils.i(LOGTAG, "onConnected: " + mConnectedDevice.settings.beacon.proximityUUID().toString());
+                fetchSettings();
             }
 
             @Override
@@ -1011,31 +1043,132 @@ public class EstimoteBeacons extends CordovaPlugin {
     }
 
     /**
-     * Create JSON object representing a region.
+     * Error handler for Settings.
      */
-    private static JSONObject makeJSONRegion(Region region)
-            throws JSONException {
-        return makeJSONRegion(region, null);
+    private void onSettingsFailure(Exception e) {
+        if (null != mDeviceConnectionCallbackContext)
+            mDeviceConnectionCallbackContext.error(e.getMessage() == null ? "There was an issue fetching settings for the connected device." : e.getMessage());
+        mConnectedDeviceHashMap.clear();
+        disconnectConnectedDevice();
+        mIsFetchingSettings = false;
     }
 
     /**
-     * Create JSON object representing a region in the given state.
+     * Fetch RSSI then the rest of the settings.
      */
-    private static JSONObject makeJSONRegion(Region region, String state)
-            throws JSONException {
-        JSONObject json = new JSONObject();
-        json.put("identifier", region.getIdentifier());
-        json.put("uuid", region.getProximityUUID());
-        json.put("major", region.getMajor());
-        json.put("minor", region.getMinor());
-        if (state != null) {
-            json.put("state", state);
+    private void fetchSettings() {
+        if (mIsFetchingSettings) {
+            if (null != mDeviceConnectionCallbackContext)
+                mDeviceConnectionCallbackContext.error("Already fetching settings for the connected device.");
+            return;
         }
-        return json;
+        if (null == mConnectedDevice) {
+            onSettingsFailure(new Exception("There is no device connected."));
+            return;
+        }
+
+        if (null == mConnectedDeviceHashMap) {
+            mConnectedDeviceHashMap = new LinkedHashMap();
+        }
+        mConnectedDeviceHashMap.clear();
+
+        // Get the RSSI, then the rest of the settings
+        mConnectedDevice.readRssi(new SettingCallback<Integer>() {
+            @Override
+            public void onSuccess(Integer integer) {
+                // Store the RSSI value
+                mConnectedDeviceHashMap.put("rssi", integer);
+
+                // Fetch the rest of the settings
+                fetchSettings(new SettingCallback<Map<Object, Object>>() {
+                    @Override
+                    public void onSuccess(Map<Object, Object> objectObjectMap) {
+                        // Add the new settings to the hashmap
+                        mConnectedDeviceHashMap.putAll((LinkedHashMap) objectObjectMap);
+
+                        // Create JSON beacon info object.
+                        JSONObject json;
+                        try {
+                            json = makeJSONConnectedDevice();
+                        } catch (Exception e) {
+                            onSettingsFailure(e);
+                            return;
+                        }
+
+                        // Send result to JavaScript.
+                        PluginResult r = new PluginResult(PluginResult.Status.OK, json);
+                        r.setKeepCallback(true);
+                        mScanningCallbackContext.sendPluginResult(r);
+                    }
+
+                    @Override
+                    public void onFailure(DeviceConnectionException e) {
+                        onSettingsFailure(e);
+                    }
+                });
+            }
+
+            @Override
+            public void onFailure(DeviceConnectionException e) {
+                onSettingsFailure(e);
+            }
+        });
     }
 
     /**
-     * Create JSON object representing a beacon list.
+     * Fetch LinkedHashMap of settings for the connected device.
+     */
+    private void fetchSettings(final SettingCallback<Map<Object, Object>> callback) {
+        if (null == mConnectedDevice) {
+            onSettingsFailure(new Exception("There is no device connected."));
+            return;
+        }
+        Settings settings = mConnectedDevice.settings;
+
+        // TODO: Make this a dynamic config from JS plugin
+        SettingsReader reader = new SettingsReader(mConnectedDevice);
+        reader.get("beacon.enabled", settings.beacon.enable());
+        reader.get("beacon.proximityUUID", settings.beacon.proximityUUID());
+        reader.get("beacon.major", settings.beacon.major());
+        reader.get("beacon.minor", settings.beacon.minor());
+        reader.get("beacon.transmitPower", settings.beacon.transmitPower());
+        reader.get("beacon.advertisingInterval", settings.beacon.advertisingInterval());
+        reader.get("indoorLocation.name", settings.deviceInfo.indoorLocation.name());
+        reader.get("uptime", settings.other.uptime());
+        reader.get("power.batteryVoltage", settings.power.batteryVoltage());
+        reader.get("power.batteryPercentage", settings.power.batteryPercentage());
+        reader.get("power.estimatedBatteryLifetime", settings.power.estimatedBatteryLifetime());
+        reader.get("nfc.data", settings.nfc.data());
+        reader.get("sensors.ambientLight", settings.sensors.light.ambientLight());
+        reader.get("sensors.temperature", settings.sensors.temperature.temperature());
+        reader.get("location.advertisingInterval", settings.estimote.location.advertisingInterval());
+        reader.get("location.transmitPower", settings.estimote.location.transmitPower());
+        reader.get("telemetry.advertisingInterval", settings.estimote.telemetry.advertisingInterval());
+        reader.get("telemetry.transmitPower", settings.estimote.telemetry.transmitPower());
+        reader.get("deviceInfo.bootloader", settings.deviceInfo.bootloader());
+        reader.get("deviceInfo.firmware", settings.deviceInfo.firmware());
+        reader.get("deviceInfo.formFactor", settings.deviceInfo.formFactor());
+//        reader.get("deviceInfo.geoLocation", settings.deviceInfo.geoLocation());
+        reader.get("deviceInfo.hardware", settings.deviceInfo.hardware());
+        reader.get("deviceInfo.name", settings.deviceInfo.name());
+        reader.get("deviceInfo.tags", settings.deviceInfo.tags());
+        reader.read(callback);
+    }
+
+    /**
+     * Create JSON object representing the connected device.
+     */
+    private JSONObject makeJSONConnectedDevice()
+            throws Exception {
+        if (null == mConnectedDevice) {
+            throw new Exception("There is no device connected.");
+        }
+
+        return new JSONObject(mConnectedDeviceHashMap);
+    }
+
+    /**
+     * Create JSON array representing a beacon list.
      */
     private JSONArray makeJSONBeaconArray(List<Beacon> beacons)
             throws JSONException {
@@ -1075,7 +1208,7 @@ public class EstimoteBeacons extends CordovaPlugin {
     }
 
     /**
-     * Create JSON object representing a device list.
+     * Create JSON array representing a device list.
      */
     private JSONArray makeJSONDeviceArray(List<ConfigurableDevicesScanner.ScanResultItem> devices)
             throws JSONException {
